@@ -243,8 +243,10 @@ class RandomSampleCrop(object):
     def __call__(self, image, boxes=None, labels=None):
         height, width, _ = image.shape
         while True:
-            # randomly choose a mode
-            mode = random.choice(self.sample_options)
+            # randomly choose a mode omg wtf inline causes error, externing to variable not :D
+            intnum = random.randint(len(self.sample_options))
+            mode = self.sample_options[intnum]
+            
             if mode is None:
                 return image, boxes, labels
 

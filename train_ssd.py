@@ -1,8 +1,10 @@
+# pip install -U label-studio
 import argparse
 import os
 import logging
 import sys
 import itertools
+from datetime import datetime
 
 import torch
 from torch.utils.data import DataLoader, ConcatDataset
@@ -23,7 +25,17 @@ from vision.ssd.config import vgg_ssd_config
 from vision.ssd.config import mobilenetv1_ssd_config
 from vision.ssd.config import squeezenet_ssd_config
 from vision.ssd.data_preprocessing import TrainAugmentation, TestTransform
+from datetime import *
+from torch.utils.data.distributed import DistributedSampler
+from pprint import pformat as pf
+import pickle
 
+__DEBUG1__= True #False #True
+#restora
+__DEBUG2__=False#True
+# OK
+#__Deb_2Str__="models/2023-11-04_18-47-55_init_mb1-ssd.pth"
+__Deb_2Str__="models/op/2023-11-02_20-57-51mb1-ssd-Epoch-9-.weights"
 parser = argparse.ArgumentParser(
     description='Single Shot MultiBox Detector Training With Pytorch')
 
@@ -100,13 +112,59 @@ parser.add_argument('--checkpoint_folder', default='models/',
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+#parser.add_argument("--local_rank", default=0, type=int)
+parser.add_argument("--node_rank", default=0, type=int)
+parser.add_argument("--nproc_per_node", default=1, type=int)
+parser.add_argument("--world_size", default=5, type=int)
+parser.add_argument("--master_addr", default='127.0.0.1', type=str)
+parser.add_argument("--master_port", default=7000, type=int)
+parser.add_argument("--local_rank", default=0, type=int)
+parser.add_argument("--n_cpu", type=int, default=0, help="number of cpu threads to use during batch generation")
 args = parser.parse_args()
+opt = args
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() and args.use_cuda else "cpu")
 
 if args.use_cuda and torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
     logging.info("Use Cuda.")
 
+#os.environ["MASTER_ADDR"] = str(opt.master_addr)
+#os.environ["MASTER_PORT"] = str(opt.master_port)
+
+def pickle_trick(obj, max_depth=10):
+    output = {}
+
+    if max_depth <= 0:
+        return output
+
+    try:
+        failing_children = []
+
+        if hasattr(obj, "__dict__"):
+            for k, v in obj.__dict__.items():
+                result = pickle_trick(v, max_depth=max_depth - 1)
+                if result:
+                    failing_children.append(result)
+        print(obj)
+        print(failing_children)
+        pickle.dumps(obj)
+    except (pickle.PicklingError, TypeError) as e:
+        failing_children = []
+
+        if hasattr(obj, "__dict__"):
+            for k, v in obj.__dict__.items():
+                result = pickle_trick(v, max_depth=max_depth - 1)
+                if result:
+                    failing_children.append(result)
+
+        output = {
+            "fail": obj, 
+            "err": e, 
+            "depth": max_depth, 
+            "failing_children": failing_children
+        }
+
+    return output
 
 def train(loader, net, criterion, optimizer, device, debug_steps=100, epoch=-1):
     net.train(True)
@@ -143,7 +201,6 @@ def train(loader, net, criterion, optimizer, device, debug_steps=100, epoch=-1):
             running_regression_loss = 0.0
             running_classification_loss = 0.0
 
-
 def test(loader, net, criterion, device):
     net.eval()
     running_loss = 0.0
@@ -170,7 +227,38 @@ def test(loader, net, criterion, device):
 
 if __name__ == '__main__':
     timer = Timer()
-
+    if(__DEBUG1__):
+        os.environ.setdefault('nproc-per-node','1')
+        os.environ.setdefault('max-restarts','9')
+        os.environ.setdefault('rdzv-id','3')
+        os.environ.setdefault('rdzv-backend','static')
+        os.environ.setdefault('rdzv-endpoint','127.0.0.1:7000')
+        os.environ.setdefault('nnodes','1')
+        os.environ.setdefault('LOCAL_RANK','0')
+        os.environ.setdefault('RANK','0')
+        os.environ.setdefault('WORLD_SIZE','1')
+        os.environ.setdefault('MASTER_ADDR','127.0.0.1')
+        os.environ.setdefault('MASTER_PORT','7000')
+###############################################################################
+        # parser.__setattr__("--dataset_type","open_images")
+        # parser.add_argument("--dataset_type", type=str, default="open_images", help="for debug purposes..")
+        # parser.__setattr__("--datasets","data")
+        # parser.add_argument("--datasets", type=str, default="data", help="for debug purposes..")
+        args.__setattr__("dataset_type", "open_images")
+        args.__setattr__("datasets", ["data"])
+        args.__setattr__("net", "mb1-ssd")
+        args.__setattr__("pretrained_ssd", "models/mobilenet-v1-ssd-mp-0_675.pth")
+        # ??DEVUG2==
+        if(__DEBUG2__):
+            args.__setattr__("resume", __Deb_2Str__)
+        args.__setattr__("scheduler", "cosine")
+        args.__setattr__("lr", float("0.01"))
+        args.__setattr__("t_max", int("100"))
+        args.__setattr__("validation_epochs", int("5"))
+        args.__setattr__("num_epochs", int("20"))
+        args.__setattr__("base_net_lr", float("0.001"))
+        args.__setattr__("batch_size", int("5"))
+        args.__setattr__("num_workers", int("1"))
     logging.info(args)
     if args.net == 'vgg16-ssd':
         create_net = create_vgg_ssd
@@ -197,134 +285,232 @@ if __name__ == '__main__':
         logging.fatal("The net type is wrong.")
         parser.print_help(sys.stderr)
         sys.exit(1)
+    if os.environ.get('LOCAL_RANK'):
+        print(str(os.environ['LOCAL_RANK']))
+#    if(str(os.environ['LOCAL_RANK'])==""):
+#        os.environ['LOCAL_RANK'] = opt.node_rank
+#    else:
+#        opt.node_rank = os.environ['LOCAL_RANK']
+ #   torch.distributed.init_process_group(backend='gloo', rank=opt.node_rank, world_size=opt.world_size, timeout=timedelta(seconds=3600))
+    torch.distributed.init_process_group(backend="gloo")
     train_transform = TrainAugmentation(config.image_size, config.image_mean, config.image_std)
     target_transform = MatchPrior(config.priors, config.center_variance,
                                   config.size_variance, 0.5)
 
     test_transform = TestTransform(config.image_size, config.image_mean, config.image_std)
+    len_images_prev = 0
+    len_images_now = 0
+    first_launch = True
 
-    logging.info("Prepare training datasets.")
-    datasets = []
-    for dataset_path in args.datasets:
-        if args.dataset_type == 'voc':
-            dataset = VOCDataset(dataset_path, transform=train_transform,
-                                 target_transform=target_transform)
-            label_file = os.path.join(args.checkpoint_folder, "voc-model-labels.txt")
-            store_labels(label_file, dataset.class_names)
-            num_classes = len(dataset.class_names)
-        elif args.dataset_type == 'open_images':
-            dataset = OpenImagesDataset(dataset_path,
-                 transform=train_transform, target_transform=target_transform,
-                 dataset_type="train", balance_data=args.balance_data)
-            label_file = os.path.join(args.checkpoint_folder, "open-images-model-labels.txt")
-            store_labels(label_file, dataset.class_names)
-            logging.info(dataset)
-            num_classes = len(dataset.class_names)
-
-        else:
-            raise ValueError(f"Dataset type {args.dataset_type} is not supported.")
-        datasets.append(dataset)
-    logging.info(f"Stored labels into file {label_file}.")
-    train_dataset = ConcatDataset(datasets)
-    logging.info("Train dataset size: {}".format(len(train_dataset)))
-    train_loader = DataLoader(train_dataset, args.batch_size,
-                              num_workers=args.num_workers,
-                              shuffle=True)
-    logging.info("Prepare Validation datasets.")
-    if args.dataset_type == "voc":
-        val_dataset = VOCDataset(args.validation_dataset, transform=test_transform,
-                                 target_transform=target_transform, is_test=True)
-    elif args.dataset_type == 'open_images':
-        val_dataset = OpenImagesDataset(dataset_path,
-                                        transform=test_transform, target_transform=target_transform,
-                                        dataset_type="test")
-        logging.info(val_dataset)
-    logging.info("validation dataset size: {}".format(len(val_dataset)))
-
-    val_loader = DataLoader(val_dataset, args.batch_size,
-                            num_workers=args.num_workers,
-                            shuffle=False)
-    logging.info("Build network.")
-    net = create_net(num_classes)
-    min_loss = -10000.0
     last_epoch = -1
-
-    base_net_lr = args.base_net_lr if args.base_net_lr is not None else args.lr
-    extra_layers_lr = args.extra_layers_lr if args.extra_layers_lr is not None else args.lr
-    if args.freeze_base_net:
-        logging.info("Freeze base net.")
-        freeze_net_layers(net.base_net)
-        params = itertools.chain(net.source_layer_add_ons.parameters(), net.extras.parameters(),
-                                 net.regression_headers.parameters(), net.classification_headers.parameters())
-        params = [
-            {'params': itertools.chain(
-                net.source_layer_add_ons.parameters(),
-                net.extras.parameters()
-            ), 'lr': extra_layers_lr},
-            {'params': itertools.chain(
-                net.regression_headers.parameters(),
-                net.classification_headers.parameters()
-            )}
-        ]
-    elif args.freeze_net:
-        freeze_net_layers(net.base_net)
-        freeze_net_layers(net.source_layer_add_ons)
-        freeze_net_layers(net.extras)
-        params = itertools.chain(net.regression_headers.parameters(), net.classification_headers.parameters())
-        logging.info("Freeze all the layers except prediction heads.")
-    else:
-        params = [
-            {'params': net.base_net.parameters(), 'lr': base_net_lr},
-            {'params': itertools.chain(
-                net.source_layer_add_ons.parameters(),
-                net.extras.parameters()
-            ), 'lr': extra_layers_lr},
-            {'params': itertools.chain(
-                net.regression_headers.parameters(),
-                net.classification_headers.parameters()
-            )}
-        ]
-
-    timer.start("Load Model")
-    if args.resume:
-        logging.info(f"Resume from the model {args.resume}")
-        net.load(args.resume)
-    elif args.base_net:
-        logging.info(f"Init from base net {args.base_net}")
-        net.init_from_base_net(args.base_net)
-    elif args.pretrained_ssd:
-        logging.info(f"Init from pretrained ssd {args.pretrained_ssd}")
-        net.init_from_pretrained_ssd(args.pretrained_ssd)
-    logging.info(f'Took {timer.end("Load Model"):.2f} seconds to load the model.')
-
-    net.to(DEVICE)
-
-    criterion = MultiboxLoss(config.priors, iou_threshold=0.5, neg_pos_ratio=3,
-                             center_variance=0.1, size_variance=0.2, device=DEVICE)
-    optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum,
-                                weight_decay=args.weight_decay)
-    logging.info(f"Learning rate: {args.lr}, Base net learning rate: {base_net_lr}, "
-                 + f"Extra Layers learning rate: {extra_layers_lr}.")
-
-    if args.scheduler == 'multi-step':
-        logging.info("Uses MultiStepLR scheduler.")
-        milestones = [int(v.strip()) for v in args.milestones.split(",")]
-        scheduler = MultiStepLR(optimizer, milestones=milestones,
-                                                     gamma=0.1, last_epoch=last_epoch)
-    elif args.scheduler == 'cosine':
-        logging.info("Uses CosineAnnealingLR scheduler.")
-        scheduler = CosineAnnealingLR(optimizer, args.t_max, last_epoch=last_epoch)
-    else:
-        logging.fatal(f"Unsupported Scheduler: {args.scheduler}.")
-        parser.print_help(sys.stderr)
-        sys.exit(1)
-
+    #unimplemented parameter???
     logging.info(f"Start training from epoch {last_epoch + 1}.")
     for epoch in range(last_epoch + 1, args.num_epochs):
-        scheduler.step()
+        logging.info("Checking for train dataset updates...")
+        len_images_prev = len_images_now
+        len_dsets = 0
+        for dataset_path in args.datasets:
+            if args.dataset_type == 'voc':
+                dataset = VOCDataset(dataset_path, transform=train_transform,
+                                     target_transform=target_transform)
+                label_file = os.path.join(args.checkpoint_folder, "voc-model-labels.txt")
+                store_labels(label_file, dataset.class_names)
+                num_classes = len(dataset.class_names)
+            elif args.dataset_type == 'open_images':
+                dataset = OpenImagesDataset(dataset_path,
+                     transform=train_transform, target_transform=target_transform,
+                     dataset_type="train", balance_data=args.balance_data)
+                label_file = os.path.join(args.checkpoint_folder, "open-images-model-labels.txt")
+                store_labels(label_file, dataset.class_names)
+                logging.info(dataset)
+                num_classes = len(dataset.class_names)
+            else:
+                raise ValueError(f"Dataset type {args.dataset_type} is not supported.")
+            len_dsets = len_dsets + len(dataset)
+            del dataset
+        len_images_now = len_dsets
+        if(len_images_now != len_images_prev):
+            len_images_prev = len_images_now
+            logging.info("Initializing datasets. First run or new images appeared compared to previous iteration in this launch.")
+            logging.info("Prepare training datasets.")
+            datasets = []
+            len_dsets = 0
+            for dataset_path in args.datasets:
+                if args.dataset_type == 'voc':
+                    dataset = VOCDataset(dataset_path, transform=train_transform,
+                                         target_transform=target_transform)
+                    label_file = os.path.join(args.checkpoint_folder, "voc-model-labels.txt")
+                    store_labels(label_file, dataset.class_names)
+                    num_classes = len(dataset.class_names)
+                elif args.dataset_type == 'open_images':
+                    dataset = OpenImagesDataset(dataset_path,
+                         transform=train_transform, target_transform=target_transform,
+                         dataset_type="train", balance_data=args.balance_data)
+                    label_file = os.path.join(args.checkpoint_folder, "open-images-model-labels.txt")
+                    store_labels(label_file, dataset.class_names)
+                    logging.info(dataset)
+                    num_classes = len(dataset.class_names)
+
+                else:
+                    raise ValueError(f"Dataset type {args.dataset_type} is not supported.")
+                len_dsets = len_dsets + len(dataset)
+                datasets.append(dataset)
+            logging.info(f"Stored labels into file {label_file}.")
+            train_dataset = ConcatDataset(datasets)
+            len_images_now = len_dsets
+            del datasets
+            logging.info("Train dataset size: {}".format(len(train_dataset)))
+            train_loader = DataLoader(train_dataset, args.batch_size,
+                                      num_workers=args.num_workers,
+                                      shuffle=True)
+            #todo: add distributed devices !!!!!!!!!!!!!!!!!!!!!!!
+            logging.info("distributed devices....")
+            dist_sampler = DistributedSampler(dataset)
+            train_loader = DataLoader(dataset, sampler=dist_sampler, num_workers=opt.n_cpu)#, batch_size=opt.batch_size, shuffle=False, num_workers=opt.n_cpu)
+
+            logging.info("Prepare Validation datasets.")
+            if args.dataset_type == "voc":
+                val_dataset = VOCDataset(args.validation_dataset, transform=test_transform,
+                                         target_transform=target_transform, is_test=True)
+            elif args.dataset_type == 'open_images':
+                val_dataset = OpenImagesDataset(dataset_path,
+                                                transform=test_transform, target_transform=target_transform,
+                                                dataset_type="test")
+                logging.info(val_dataset)
+            logging.info("validation dataset size: {}".format(len(val_dataset)))
+
+            val_loader = DataLoader(val_dataset, args.batch_size,
+                                    num_workers=args.num_workers,
+                                    shuffle=False)
+            cuda = args.use_cuda and torch.cuda.is_available()
+            #Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
+
+            #optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()))
+            if(first_launch):
+                logging.info("Build network.")
+                net = create_net(num_classes)
+                min_loss = -10000.0
+
+                base_net_lr = args.base_net_lr if args.base_net_lr is not None else args.lr
+                extra_layers_lr = args.extra_layers_lr if args.extra_layers_lr is not None else args.lr
+                if args.freeze_base_net:
+                    logging.info("Freeze base net.")
+                    freeze_net_layers(net.base_net)
+                    params = itertools.chain(net.source_layer_add_ons.parameters(), net.extras.parameters(),
+                                             net.regression_headers.parameters(), net.classification_headers.parameters())
+                    params = [
+                        {'params': itertools.chain(
+                            net.source_layer_add_ons.parameters(),
+                            net.extras.parameters()
+                        ), 'lr': extra_layers_lr},
+                        {'params': itertools.chain(
+                            net.regression_headers.parameters(),
+                            net.classification_headers.parameters()
+                        )}
+                    ]
+                elif args.freeze_net:
+                    freeze_net_layers(net.base_net)
+                    freeze_net_layers(net.source_layer_add_ons)
+                    freeze_net_layers(net.extras)
+                    params = itertools.chain(net.regression_headers.parameters(), net.classification_headers.parameters())
+                    logging.info("Freeze all the layers except prediction heads.")
+                else:
+                    params = [
+                        {'params': net.base_net.parameters(), 'lr': base_net_lr},
+                        {'params': itertools.chain(
+                            net.source_layer_add_ons.parameters(),
+                            net.extras.parameters()
+                        ), 'lr': extra_layers_lr},
+                        {'params': itertools.chain(
+                            net.regression_headers.parameters(),
+                            net.classification_headers.parameters()
+                        )}
+                    ]
+
+                is_HAL_here = False
+                timer.start("Load Model")
+                if args.resume:
+                    logging.info(f"Resume from the model {args.resume}")
+                    if args.pretrained_ssd:
+                       logging.info(f"Init from pretrained ssd {args.pretrained_ssd}")
+                       net.init_from_pretrained_ssd(args.pretrained_ssd)
+                       net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
+                                                                      output_device=None)
+                       net.load_state_dict(
+                       torch.load(args.resume))#, map_location=map_location))
+                       # nope, no help
+                       # torch.distributed.barrier()
+                       logging.info(f'Took {timer.end("Load Model"):.2f} seconds to load the model.')
+                       is_HAL_here = True
+                    else:
+                       net.load(args.resume)
+                elif args.base_net:
+                    logging.info(f"Init from base net {args.base_net}")
+                    net.init_from_base_net(args.base_net)
+                elif args.pretrained_ssd:
+                    logging.info(f"Init from pretrained ssd {args.pretrained_ssd}")
+                    net.init_from_pretrained_ssd(args.pretrained_ssd)
+                logging.info(f'Took {timer.end("Load Model"):.2f} seconds to load the model.')
+                timestr = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                # print(pf(pickle_trick(net.state_dict())))
+                #torch.save(net.state_dict(), os.path.join(args.checkpoint_folder, f"{timestr}_init_{args.net}.pth"))
+                #net.load_state_dict(torch.load(os.path.join(args.checkpoint_folder, f"{timestr}_init_{args.net}.pth")))
+                #barenet=net
+                net.to(DEVICE)
+                local_rank = int(os.environ["LOCAL_RANK"])
+                print("!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                print(local_rank)
+                print(os.environ["RANK"])
+                print("!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                if not is_HAL_here:
+                    net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
+                                                                      output_device=None)
+
+                criterion = MultiboxLoss(config.priors, iou_threshold=0.5, neg_pos_ratio=3,
+                                         center_variance=0.1, size_variance=0.2, device=DEVICE)
+                optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum,
+                                            weight_decay=args.weight_decay)
+                logging.info(f"Learning rate: {args.lr}, Base net learning rate: {base_net_lr}, "
+                             + f"Extra Layers learning rate: {extra_layers_lr}.")
+
+                if args.scheduler == 'multi-step':
+                    logging.info("Uses MultiStepLR scheduler.")
+                    milestones = [int(v.strip()) for v in args.milestones.split(",")]
+                    scheduler = MultiStepLR(optimizer, milestones=milestones,
+                                                                 gamma=0.1, last_epoch=last_epoch)
+                elif args.scheduler == 'cosine':
+                    logging.info("Uses CosineAnnealingLR scheduler.")
+                    scheduler = CosineAnnealingLR(optimizer, args.t_max, last_epoch=last_epoch)
+                else:
+                    logging.fatal(f"Unsupported Scheduler: {args.scheduler}.")
+                    parser.print_help(sys.stderr)
+                    sys.exit(1)
+                first_launch = False
+            
+            #scheduler.step()
+            #print('bare net backup before train....')
+            #torch.save(net.state_dict(), os.path.join(args.checkpoint_folder, f"{timestr}_init_{args.net}.pth"))
+            #torch.distributed.barrier()
+            #net.load_state_dict(torch.load(os.path.join(args.checkpoint_folder, f"{timestr}_init_{args.net}.pth")))
+
+            #barenet.save('test.pth')
+            #torch.distributed.barrier()
+            #barenet.load('test.pth')
         train(train_loader, net, criterion, optimizer,
               device=DEVICE, debug_steps=args.debug_steps, epoch=epoch)
-        
+        scheduler.step()
+        torch.distributed.barrier()
+        timestr = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        print(os.path.join(args.checkpoint_folder, f"{timestr}{args.net}-Epoch-{epoch}-.weights"))
+        model_path=os.path.join(args.checkpoint_folder, f"{timestr}{args.net}-Epoch-{epoch}-.weights")
+        torch.save(net.state_dict(), model_path)
+        print("barrier...")
+        torch.distributed.barrier()
+        #map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
+        net.load_state_dict(
+        torch.load(model_path))#, map_location=map_location))
+        logging.info(f"Saved an re-loaded model state {model_path}")
+
         if epoch % args.validation_epochs == 0 or epoch == args.num_epochs - 1:
             val_loss, val_regression_loss, val_classification_loss = test(val_loader, net, criterion, DEVICE)
             logging.info(
@@ -333,6 +519,21 @@ if __name__ == '__main__':
                 f"Validation Regression Loss {val_regression_loss:.4f}, " +
                 f"Validation Classification Loss: {val_classification_loss:.4f}"
             )
-            model_path = os.path.join(args.checkpoint_folder, f"{args.net}-Epoch-{epoch}-Loss-{val_loss}.pth")
-            net.save(model_path)
-            logging.info(f"Saved model {model_path}")
+            timestr = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            model_path = os.path.join(args.checkpoint_folder, f"{timestr}{args.net}-Epoch-{epoch}-Loss-{val_loss}.pth")
+            torch.save(net.state_dict(), model_path)
+            logging.info(f"Saved model state {model_path}")
+            #print("barrier.wwww..")
+            #torch.distributed.barrier()
+            #map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
+            #net.load_state_dict(
+            #torch.load(model_path))#, map_location=map_location))
+    timestr = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    model_path = os.path.join(args.checkpoint_folder, f"fi_dis_{timestr}_{args.net}-Epoch-{epoch}-Loss-{val_loss}.pth")
+    torch.save(net.state_dict(), model_path)
+    logging.info(f"Saved final dis model state {model_path}")
+    model_path = os.path.join(args.checkpoint_folder, f"_fi__{timestr}_{args.net}-Epoch-{epoch}-Loss-{val_loss}.pth")
+    torch.save(net.module.state_dict(), model_path)
+    logging.info(f"Saved final model state {model_path}")
+
+	

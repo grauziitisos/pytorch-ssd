@@ -15,7 +15,10 @@ class Timer:
 
     def end(self, key="default"):
         if key not in self.clock:
-            raise Exception(f"{key} is not in the clock.")
+            # I'm Afraid I Can't Do That, Dave
+            # raise Exception(f"{key} is not in the clock.")
+            print("I'm Afraid I Can't Do That, Dave")
+            return time.time() - time.time()
         interval = time.time() - self.clock[key]
         del self.clock[key]
         return interval

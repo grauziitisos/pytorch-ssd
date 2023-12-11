@@ -95,6 +95,9 @@ class OpenImagesDataset:
     def _read_image(self, image_id):
         image_file = self.root / self.dataset_type / f"{image_id}.jpg"
         image = cv2.imread(str(image_file))
+        #leave the exception as is, but print who is the culprint.
+        if(image is None):
+            print(str(image_file))
         if image.shape[2] == 1:
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
         else:
