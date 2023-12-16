@@ -18,6 +18,12 @@ from vision.ssd.mobilenetv1_ssd_lite import create_mobilenetv1_ssd_lite
 from vision.ssd.mobilenet_v2_ssd_lite import create_mobilenetv2_ssd_lite
 from vision.ssd.mobilenetv3_ssd_lite import create_mobilenetv3_large_ssd_lite, create_mobilenetv3_small_ssd_lite
 from vision.ssd.squeezenet_ssd_lite import create_squeezenet_ssd_lite
+from vision.ssd.vgg_ssd import create_vgg_ssd, create_vgg_ssd_predictor
+from vision.ssd.mobilenetv1_ssd import create_mobilenetv1_ssd, create_mobilenetv1_ssd_predictor
+from vision.ssd.mobilenetv1_ssd_lite import create_mobilenetv1_ssd_lite, create_mobilenetv1_ssd_lite_predictor
+from vision.ssd.squeezenet_ssd_lite import create_squeezenet_ssd_lite, create_squeezenet_ssd_lite_predictor
+from vision.ssd.mobilenet_v2_ssd_lite import create_mobilenetv2_ssd_lite, create_mobilenetv2_ssd_lite_predictor
+from vision.ssd.mobilenetv3_ssd_lite import create_mobilenetv3_large_ssd_lite, create_mobilenetv3_small_ssd_lite
 from vision.datasets.voc_dataset import VOCDataset
 from vision.datasets.open_images import OpenImagesDataset
 from vision.nn.multibox_loss import MultiboxLoss
@@ -108,6 +114,9 @@ parser.add_argument('--use_cuda', default=True, type=str2bool,
 
 parser.add_argument('--checkpoint_folder', default='models/',
                     help='Directory for saving checkpoint models')
+                    
+parser.add_argument('--in_mod', default=1, type=int,
+                    help='normal or parallel. 0 normal 1 parallel dict')
 
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
@@ -201,7 +210,7 @@ def train(loader, net, criterion, optimizer, device, debug_steps=100, epoch=-1):
             running_regression_loss = 0.0
             running_classification_loss = 0.0
 
-def test(loader, net, criterion, device):
+def test(loader, net, criterion, device, net_type='sq-ssd-lite'):
     net.eval()
     running_loss = 0.0
     running_regression_loss = 0.0
@@ -223,6 +232,45 @@ def test(loader, net, criterion, device):
         running_regression_loss += regression_loss.item()
         running_classification_loss += classification_loss.item()
     return running_loss / num, running_regression_loss / num, running_classification_loss / num
+    
+def draw_tests(net, device, net_type='sq-ssd-lite'):
+    if net_type == 'vgg16-ssd':
+        predictor = create_vgg_ssd_predictor(net, candidate_size=200)
+    elif net_type == 'mb1-ssd':
+        predictor = create_mobilenetv1_ssd_predictor(net, candidate_size=200)
+    elif net_type == 'mb1-ssd-lite':
+        predictor = create_mobilenetv1_ssd_lite_predictor(net, candidate_size=200)
+    elif net_type == 'mb2-ssd-lite' or net_type == "mb3-large-ssd-lite" or net_type == "mb3-small-ssd-lite":
+        predictor = create_mobilenetv2_ssd_lite_predictor(net, candidate_size=200)
+    elif net_type == 'sq-ssd-lite':
+        predictor = create_squeezenet_ssd_lite_predictor(net, candidate_size=200)
+    else:
+        print("The net type is wrong. It should be one of vgg16-ssd, mb1-ssd and mb1-ssd-lite.")
+        sys.exit(1)
+    
+    
+    timer = Timer()
+    while True:
+        ret, orig_image = cap.read()
+        if orig_image is None:
+            continue
+        image = cv2.cvtColor(orig_image, cv2.COLOR_BGR2RGB)
+        timer.start()
+        boxes, labels, probs = predictor.predict(image, 10, 0.4)
+        interval = timer.end()
+        print('Time: {:.2f}s, Detect Objects: {:d}.'.format(interval, labels.size(0)))
+        for i in range(boxes.size(0)):
+            box = boxes[i, :]
+            label = f"{class_names[labels[i]]}: {probs[i]:.2f}"
+            cv2.rectangle(orig_image, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (255, 255, 0), 4)
+    
+            cv2.putText(orig_image, label,
+                        (int(box[0])+20, int(box[1])+40),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,  # font scale
+                        (255, 0, 255),
+                        2)  # line type
+    
 
 
 if __name__ == '__main__':
@@ -434,10 +482,16 @@ if __name__ == '__main__':
                     if args.pretrained_ssd:
                        logging.info(f"Init from pretrained ssd {args.pretrained_ssd}")
                        net.init_from_pretrained_ssd(args.pretrained_ssd)
-                       net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
+                       if(args.in_mod==1):
+                        net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
                                                                       output_device=None)
-                       net.load_state_dict(
-                       torch.load(args.resume))#, map_location=map_location))
+                        net.load_state_dict(
+                        torch.load(args.resume))#, map_location=map_location))
+                       else:
+                        net.load_state_dict(
+                        torch.load(args.resume))#, map_location=map_location))
+                        net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
+                                                                      output_device=None)
                        # nope, no help
                        # torch.distributed.barrier()
                        logging.info(f'Took {timer.end("Load Model"):.2f} seconds to load the model.')
@@ -496,6 +550,7 @@ if __name__ == '__main__':
             #barenet.save('test.pth')
             #torch.distributed.barrier()
             #barenet.load('test.pth')
+        # draw_tests(net, DEVICE, net_type='sq-ssd-lite')
         train(train_loader, net, criterion, optimizer,
               device=DEVICE, debug_steps=args.debug_steps, epoch=epoch)
         scheduler.step()
@@ -510,7 +565,8 @@ if __name__ == '__main__':
         net.load_state_dict(
         torch.load(model_path))#, map_location=map_location))
         logging.info(f"Saved an re-loaded model state {model_path}")
-
+        # draw_tests(net, DEVICE, net_type='sq-ssd-lite')
+        
         if epoch % args.validation_epochs == 0 or epoch == args.num_epochs - 1:
             val_loss, val_regression_loss, val_classification_loss = test(val_loader, net, criterion, DEVICE)
             logging.info(
