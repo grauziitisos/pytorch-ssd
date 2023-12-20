@@ -36,7 +36,7 @@ from torch.utils.data.distributed import DistributedSampler
 from pprint import pformat as pf
 import pickle
 
-__DEBUG1__= True #False #True
+__DEBUG1__= False #True
 #restora
 __DEBUG2__=False#True
 # OK
@@ -335,6 +335,7 @@ if __name__ == '__main__':
         sys.exit(1)
     if os.environ.get('LOCAL_RANK'):
         print(str(os.environ['LOCAL_RANK']))
+    print(f'net name: {args.net}')
 #    if(str(os.environ['LOCAL_RANK'])==""):
 #        os.environ['LOCAL_RANK'] = opt.node_rank
 #    else:
@@ -416,6 +417,14 @@ if __name__ == '__main__':
             dist_sampler = DistributedSampler(dataset)
             train_loader = DataLoader(dataset, sampler=dist_sampler, num_workers=opt.n_cpu)#, batch_size=opt.batch_size, shuffle=False, num_workers=opt.n_cpu)
 
+           # for i, data in enumerate(train_loader):
+           #     images, boxes, labels = data
+           #     print("----------------")
+           #     print(len(images[0]))
+           #     print(boxes[0])
+           #     print("--------------111111111111")
+
+
             logging.info("Prepare Validation datasets.")
             if args.dataset_type == "voc":
                 val_dataset = VOCDataset(args.validation_dataset, transform=test_transform,
@@ -482,22 +491,32 @@ if __name__ == '__main__':
                     if args.pretrained_ssd:
                        logging.info(f"Init from pretrained ssd {args.pretrained_ssd}")
                        net.init_from_pretrained_ssd(args.pretrained_ssd)
-                       if(args.in_mod==1):
-                        net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
-                                                                      output_device=None)
-                        net.load_state_dict(
-                        torch.load(args.resume))#, map_location=map_location))
-                       else:
-                        net.load_state_dict(
-                        torch.load(args.resume))#, map_location=map_location))
-                        net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
-                                                                      output_device=None)
-                       # nope, no help
-                       # torch.distributed.barrier()
-                       logging.info(f'Took {timer.end("Load Model"):.2f} seconds to load the model.')
-                       is_HAL_here = True
+                    elif args.base_net:
+                       logging.info(f"Init from base net {args.base_net}")
+                       net.init_from_base_net(args.base_net)
+                       #net.load(args.resume)
+                       #print("loaeed?")
+                    elif(args.net=='sq-ssd-lite'):
+                       a=""
                     else:
                        net.load(args.resume)
+                    if args.pretrained_ssd or args.base_net or args.net=='sq-ssd-lite':
+                        if(args.in_mod==1):
+                            #print(f"in_mod: {args.in_mod}")
+                            net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
+                                                                      output_device=None)
+                            net.load_state_dict(
+                            torch.load(args.resume))#, map_location=map_location))
+                        else:
+                            #print(f"nooo in_mod: {args.in_mod}")
+                            net.load_state_dict(
+                            torch.load(args.resume))#, map_location=map_location))
+                            net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
+                                                                      output_device=None)
+                            # nope, no help
+                            # torch.distributed.barrier()
+                    logging.info(f'Took {timer.end("Load Model"):.2f} seconds to load the model.')
+                    is_HAL_here = True
                 elif args.base_net:
                     logging.info(f"Init from base net {args.base_net}")
                     net.init_from_base_net(args.base_net)
