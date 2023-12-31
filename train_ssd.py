@@ -591,12 +591,13 @@ if __name__ == '__main__':
             #barenet.save('test.pth')
             #torch.distributed.barrier()
             #barenet.load('test.pth')
+            cantformatthis = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             val_loss_best, val_regression_loss_best, val_classification_loss_best, val_locate_best, val_confclass_best = test(val_loader, net_best, criterion, DEVICE)
             logging.info(
-                f"test best: {datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}, " +
-                f"Validation Loss: {val_loss:.4f}, " +
-                f"Validation Regression Loss {val_regression_loss:.4f}, " +
-                f"Validation Classification Loss: {val_classification_loss:.4f}"
+                f"test best: {cantformatthis}, " +
+                f"Validation Loss: {val_loss_best:.4f}, " +
+                f"Validation Regression Loss {val_regression_loss_best:.4f}, " +
+                f"Validation Classification Loss: {val_classification_loss_best:.4f}"
             )
 
         # draw_tests(net, DEVICE, net_type='sq-ssd-lite')
@@ -632,8 +633,8 @@ if __name__ == '__main__':
 
             if(val_locate < val_locate_best or val_confclass < val_confclass_best):
             	logging.info("model improved. saving best")
-            	torch.save(net.module.state_dict(), os.path.join(args.checkpoint_folder, f"{}timestr_model_best_{args.net}-e-{epoch}.pth"))
-            	net_best.module.load_state_dict(torch.load(os.path.join(args.checkpoint_folder, f"{}timestr_model_best_{args.net}-e-{epoch}.pth")))
+            	torch.save(net.module.state_dict(), os.path.join(args.checkpoint_folder, f"{timestr}_model_best_{args.net}-e-{epoch}.pth"))
+            	net_best.module.load_state_dict(torch.load(os.path.join(args.checkpoint_folder, f"{timestr}_model_best_{args.net}-e-{epoch}.pth")))
             	val_locate_best = val_locate
             	val_confclass_best = val_confclass
             else:
