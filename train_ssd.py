@@ -570,6 +570,7 @@ if __name__ == '__main__':
             #torch.distributed.barrier()
             #barenet.load('test.pth')
         # draw_tests(net, DEVICE, net_type='sq-ssd-lite')
+        #torch.save(net.module.state_dict(), "t.n")
         train(train_loader, net, criterion, optimizer,
               device=DEVICE, debug_steps=args.debug_steps, epoch=epoch)
         scheduler.step()
@@ -577,13 +578,13 @@ if __name__ == '__main__':
         timestr = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         print(os.path.join(args.checkpoint_folder, f"{timestr}{args.net}-Epoch-{epoch}-.weights"))
         model_path=os.path.join(args.checkpoint_folder, f"{timestr}{args.net}-Epoch-{epoch}-.weights")
-        torch.save(net.state_dict(), model_path)
+        torch.save(net.model.state_dict(), model_path)
         print("barrier...")
         torch.distributed.barrier()
         #map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
-        net.load_state_dict(
+        net.model.load_state_dict(
         torch.load(model_path))#, map_location=map_location))
-        logging.info(f"Saved an re-loaded model state {model_path}")
+        logging.info(f"Saved an re-loaded inner model state {model_path}")
         # draw_tests(net, DEVICE, net_type='sq-ssd-lite')
         
         if epoch % args.validation_epochs == 0 or epoch == args.num_epochs - 1:
@@ -596,8 +597,8 @@ if __name__ == '__main__':
             )
             timestr = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             model_path = os.path.join(args.checkpoint_folder, f"{timestr}{args.net}-Epoch-{epoch}-Loss-{val_loss}.pth")
-            torch.save(net.state_dict(), model_path)
-            logging.info(f"Saved model state {model_path}")
+            torch.save(net.model.state_dict(), model_path)
+            logging.info(f"Saved inner model state {model_path}")
             #print("barrier.wwww..")
             #torch.distributed.barrier()
             #map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
