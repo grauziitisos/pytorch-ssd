@@ -231,7 +231,7 @@ def test(loader, net, criterion, device, net_type='sq-ssd-lite'):
         running_loss += loss.item()
         running_regression_loss += regression_loss.item()
         running_classification_loss += classification_loss.item()
-    return running_loss / num, running_regression_loss / num, running_classification_loss / num
+    return running_loss / num, running_regression_loss / num, running_classification_loss / num, regression_loss, classification_loss 
     
 def draw_tests(net, device, net_type='sq-ssd-lite'):
     if net_type == 'vgg16-ssd':
@@ -446,6 +446,7 @@ if __name__ == '__main__':
             if(first_launch):
                 logging.info("Build network.")
                 net = create_net(num_classes)
+                net_best = create_net(num_classes)
                 min_loss = -10000.0
 
                 base_net_lr = args.base_net_lr if args.base_net_lr is not None else args.lr
@@ -491,11 +492,16 @@ if __name__ == '__main__':
                     if args.pretrained_ssd:
                        logging.info(f"Init from pretrained ssd {args.pretrained_ssd}")
                        net.init_from_pretrained_ssd(args.pretrained_ssd)
+                       net_best.init_from_pretrained_ssd(args.pretrained_ssd)
                     elif args.base_net:
                        logging.info(f"Init from base net {args.base_net}")
                        net.init_from_base_net(args.base_net)
+                       net_best.init_from_base_net(args.base_net)
+
                        #net.load(args.resume)
                        #print("loaeed?")
+#2023-12-31: why these 2 were here? how long??
+#bc no need to resume, that is why
                     elif(args.net=='sq-ssd-lite'):
                        a=""
                     else:
@@ -505,14 +511,26 @@ if __name__ == '__main__':
                             #print(f"in_mod: {args.in_mod}")
                             net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
                                                                       output_device=None)
+                            net_best = torch.nn.parallel.DistributedDataParallel(net_best,  device_ids=None,
+                                                                      output_device=None)
+
                             net.load_state_dict(
                             torch.load(args.resume))#, map_location=map_location))
+                            net_best.load_state_dict(
+                            torch.load(args.resume))#, map_location=map_location))
+
                         else:
                             #print(f"nooo in_mod: {args.in_mod}")
                             net.load_state_dict(
                             torch.load(args.resume))#, map_location=map_location))
+                            net_best.load_state_dict(
+                            torch.load(args.resume))#, map_location=map_location))
+
                             net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
                                                                       output_device=None)
+                            net_best = torch.nn.parallel.DistributedDataParallel(net_best,  device_ids=None,
+                                                                      output_device=None)
+
                             # nope, no help
                             # torch.distributed.barrier()
                     logging.info(f'Took {timer.end("Load Model"):.2f} seconds to load the model.')
@@ -520,15 +538,19 @@ if __name__ == '__main__':
                 elif args.base_net:
                     logging.info(f"Init from base net {args.base_net}")
                     net.init_from_base_net(args.base_net)
+                    net_best.init_from_base_net(args.base_net)
+
                 elif args.pretrained_ssd:
                     logging.info(f"Init from pretrained ssd {args.pretrained_ssd}")
                     net.init_from_pretrained_ssd(args.pretrained_ssd)
+                    net_best.init_from_pretrained_ssd(args.pretrained_ssd)
                 logging.info(f'Took {timer.end("Load Model"):.2f} seconds to load the model.')
                 timestr = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 # print(pf(pickle_trick(net.state_dict())))
                 #torch.save(net.state_dict(), os.path.join(args.checkpoint_folder, f"{timestr}_init_{args.net}.pth"))
                 #net.load_state_dict(torch.load(os.path.join(args.checkpoint_folder, f"{timestr}_init_{args.net}.pth")))
                 #barenet=net
+                net_best.to(DEVICE)
                 net.to(DEVICE)
                 local_rank = int(os.environ["LOCAL_RANK"])
                 print("!!!!!!!!!!!!!!!!!!!!!!!!!!!")
@@ -569,6 +591,14 @@ if __name__ == '__main__':
             #barenet.save('test.pth')
             #torch.distributed.barrier()
             #barenet.load('test.pth')
+            val_loss_best, val_regression_loss_best, val_classification_loss_best, val_locate_best, val_confclass_best = test(val_loader, net_best, criterion, DEVICE)
+            logging.info(
+                f"test best: {datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}, " +
+                f"Validation Loss: {val_loss:.4f}, " +
+                f"Validation Regression Loss {val_regression_loss:.4f}, " +
+                f"Validation Classification Loss: {val_classification_loss:.4f}"
+            )
+
         # draw_tests(net, DEVICE, net_type='sq-ssd-lite')
         #torch.save(net.module.state_dict(), "t.n")
         train(train_loader, net, criterion, optimizer,
@@ -578,17 +608,17 @@ if __name__ == '__main__':
         timestr = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         print(os.path.join(args.checkpoint_folder, f"{timestr}{args.net}-Epoch-{epoch}-.weights"))
         model_path=os.path.join(args.checkpoint_folder, f"{timestr}{args.net}-Epoch-{epoch}-.weights")
-        torch.save(net.model.state_dict(), model_path)
+        torch.save(net.module.state_dict(), model_path)
         print("barrier...")
         torch.distributed.barrier()
         #map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
-        net.model.load_state_dict(
+        net.module.load_state_dict(
         torch.load(model_path))#, map_location=map_location))
         logging.info(f"Saved an re-loaded inner model state {model_path}")
         # draw_tests(net, DEVICE, net_type='sq-ssd-lite')
         
         if epoch % args.validation_epochs == 0 or epoch == args.num_epochs - 1:
-            val_loss, val_regression_loss, val_classification_loss = test(val_loader, net, criterion, DEVICE)
+            val_loss, val_regression_loss, val_classification_loss, val_locate, val_confclass = test(val_loader, net, criterion, DEVICE)
             logging.info(
                 f"Epoch: {epoch}, " +
                 f"Validation Loss: {val_loss:.4f}, " +
@@ -597,8 +627,20 @@ if __name__ == '__main__':
             )
             timestr = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             model_path = os.path.join(args.checkpoint_folder, f"{timestr}{args.net}-Epoch-{epoch}-Loss-{val_loss}.pth")
-            torch.save(net.model.state_dict(), model_path)
+            torch.save(net.module.state_dict(), model_path)
             logging.info(f"Saved inner model state {model_path}")
+
+            if(val_locate < val_locate_best or val_confclass < val_confclass_best):
+            	logging.info("model improved. saving best")
+            	torch.save(net.module.state_dict(), os.path.join(args.checkpoint_folder, f"{}timestr_model_best_{args.net}-e-{epoch}.pth"))
+            	net_best.module.load_state_dict(torch.load(os.path.join(args.checkpoint_folder, f"{}timestr_model_best_{args.net}-e-{epoch}.pth")))
+            	val_locate_best = val_locate
+            	val_confclass_best = val_confclass
+            else:
+            	logging.info("failed attempt to improve model. reseting to last best state dict")
+            	torch.save(net_best.module.state_dict(), "temp.pth")
+            	net.module.load_state_dict(torch.load("temp.pth"))
+
             #print("barrier.wwww..")
             #torch.distributed.barrier()
             #map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
