@@ -565,10 +565,12 @@ if __name__ == '__main__':
                 print(local_rank)
                 print(os.environ["RANK"])
                 print("!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-                if not is_HAL_here:
+                if not net.module:
                     net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
                                                                       output_device=None)
-
+                if not net_best.module:
+                    net_best = torch.nn.parallel.DistributedDataParallel(net_best,  device_ids=None,
+                                                                      output_device=None)
                 criterion = MultiboxLoss(config.priors, iou_threshold=0.5, neg_pos_ratio=3,
                                          center_variance=0.1, size_variance=0.2, device=DEVICE)
                 optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum,
