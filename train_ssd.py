@@ -539,11 +539,19 @@ if __name__ == '__main__':
                     logging.info(f"Init from base net {args.base_net}")
                     net.init_from_base_net(args.base_net)
                     net_best.init_from_base_net(args.base_net)
+                    net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
+                                                                      output_device=None)
+                    net_best = torch.nn.parallel.DistributedDataParallel(net_best,  device_ids=None,
+                                                                      output_device=None)
 
                 elif args.pretrained_ssd:
                     logging.info(f"Init from pretrained ssd {args.pretrained_ssd}")
                     net.init_from_pretrained_ssd(args.pretrained_ssd)
                     net_best.init_from_pretrained_ssd(args.pretrained_ssd)
+                    net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
+                                                                      output_device=None)
+                    net_best = torch.nn.parallel.DistributedDataParallel(net_best,  device_ids=None,
+                                                                      output_device=None)
                 logging.info(f'Took {timer.end("Load Model"):.2f} seconds to load the model.')
                 timestr = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 # print(pf(pickle_trick(net.state_dict())))
