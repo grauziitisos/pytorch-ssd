@@ -643,8 +643,8 @@ if __name__ == '__main__':
 
             if(val_locate < val_locate_best or val_confclass < val_confclass_best):
             	logging.info("model improved. saving best")
-            	torch.save(net.module.state_dict(), os.path.join(args.checkpoint_folder, f"{timestr}_model_best_{args.net}-e-{epoch}.pth"))
-            	net_best.module.load_state_dict(torch.load(os.path.join(args.checkpoint_folder, f"{timestr}_model_best_{args.net}-e-{epoch}.pth")))
+            	torch.save(net.module.state_dict(), os.path.join(args.checkpoint_folder, f"best_model.pth"))
+            	net_best.module.load_state_dict(torch.load(os.path.join(args.checkpoint_folder, f"best_model.pth")))
             	val_locate_best = val_locate
             	val_confclass_best = val_confclass
             else:
