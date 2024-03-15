@@ -187,7 +187,9 @@ def train(loader, net, criterion, optimizer, device, debug_steps=100, epoch=-1):
         labels = labels.to(device)
 
         optimizer.zero_grad()
+        net.eval()
         confidence, locations = net(images)
+        net.train(True)
         regression_loss, classification_loss = criterion(confidence, locations, labels, boxes)  # TODO CHANGE BOXES
         loss = regression_loss + classification_loss
         loss.backward()
@@ -565,10 +567,22 @@ if __name__ == '__main__':
                 print(local_rank)
                 print(os.environ["RANK"])
                 print("!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-                if not net.module:
+                nomod=False
+                try:
+                    if not net.module:
+                        nomod = True
+                except:
+                    nomod = True
+                if nomod:
                     net = torch.nn.parallel.DistributedDataParallel(net,  device_ids=None,
                                                                       output_device=None)
-                if not net_best.module:
+                nomod=False
+                try:
+                    if not net_best.module:
+                        nomod = True
+                except:
+                    nomod = True
+                if nomod:
                     net_best = torch.nn.parallel.DistributedDataParallel(net_best,  device_ids=None,
                                                                       output_device=None)
                 criterion = MultiboxLoss(config.priors, iou_threshold=0.5, neg_pos_ratio=3,
@@ -610,6 +624,7 @@ if __name__ == '__main__':
                 f"Validation Classification Loss: {val_classification_loss_best:.4f}"
             )
 
+        
         # draw_tests(net, DEVICE, net_type='sq-ssd-lite')
         #torch.save(net.module.state_dict(), "t.n")
         train(train_loader, net, criterion, optimizer,
